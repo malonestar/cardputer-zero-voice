@@ -76,7 +76,7 @@ systemctl --user enable --now cz-mcp.service cz-voice.service cz-appwatch.servic
 
 ## 3. TARS remote (optional)
 
-`tars/` is a launcher app: hold TAB, talk, and a [TARS-AI](https://github.com/pyrater/TARS-AI) robot answers out loud while the reply scrolls on the Cardputer. It uses the robot's existing web login and Socket.IO interface; nothing changes on the robot. Set `tars.url` in `config.json`, put the robot's web UI password on the first line of `~/cz-ai/tars_password` (`chmod 600`), then run `tars/install.sh` on the device. `tars/mock_tars.py` is a stand-in robot for testing.
+`tars/` is a launcher app: hold TAB, talk, and a [TARS-AI](https://github.com/TARS-AI-Community/TARS-AI) robot answers out loud while the reply scrolls on the Cardputer. It uses the robot's existing web login and Socket.IO interface; nothing changes on the robot. Set `tars.url` in `config.json`, put the robot's web UI password on the first line of `~/cz-ai/tars_password` (`chmod 600`), then run `tars/install.sh` on the device. `tars/mock_tars.py` is a stand-in robot for testing.
 
 ## Not included
 
