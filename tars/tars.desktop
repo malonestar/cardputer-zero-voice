@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=TARS
+Exec=/home/YOUR_USER/cz-ai/tars/tars-remote
+Terminal=false
+Icon=share/images/tars_100.png
+Type=Application

@@ -1,0 +1,12 @@
+[Unit]
+Description=CardputerZero MCP tool server
+After=network-online.target
+
+[Service]
+ExecStart=%h/cz-ai/venv/bin/python %h/cz-ai/cz_mcp.py
+WorkingDirectory=%h/cz-ai
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

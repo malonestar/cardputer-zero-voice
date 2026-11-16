@@ -1,0 +1,14 @@
+[Unit]
+Description=CardputerZero voice layer (wake word, speech commands, dictation)
+After=pipewire.service pipewire-pulse.service wireplumber.service cz-mcp.service
+Wants=pipewire.service
+
+[Service]
+ExecStart=%h/cz-ai/venv/bin/python %h/cz-ai/voice.py
+WorkingDirectory=%h/cz-ai
+Restart=always
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=default.target

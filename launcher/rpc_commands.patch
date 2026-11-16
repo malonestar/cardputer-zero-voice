@@ -1,0 +1,943 @@
+diff --git a/docs/automation-rpc.md b/docs/automation-rpc.md
+index d13cb3a..088cba1 100644
+--- a/docs/automation-rpc.md
++++ b/docs/automation-rpc.md
+@@ -30,6 +30,10 @@ python3 scripts/cp0_rpc.py text 'hello'
+ python3 scripts/cp0_rpc.py password 'secret'
+ python3 scripts/cp0_rpc.py hold 28 1
+ python3 scripts/cp0_rpc.py screenshot screenshot.ppm
++python3 scripts/cp0_rpc.py apps
++python3 scripts/cp0_rpc.py current
++python3 scripts/cp0_rpc.py launch --wait 10 Calculator
++python3 scripts/cp0_rpc.py home --wait 10
+ ```
+ 
+ `key` 参数依次为 Linux evdev key code、状态（`0` release、`1` press、`2` repeat）和 modifier bitmask。客户端可通过全局选项 `--endpoint` 与 `--timeout`（毫秒）覆盖连接参数。密码会进入进程参数列表，不应在多用户主机上传入敏感值。
+@@ -42,8 +46,14 @@ python3 scripts/cp0_rpc.py screenshot screenshot.ppm
+ | `key <code> <state> <mods>` | `OK key` |
+ | `text <utf8>` | `OK text` |
+ | `password <value>` | `OK password` |
++| `apps` | `OK apps` followed by one app name per line, in carousel order |
++| `current` | `OK current` followed by `selected=`, `index=`, `mode=` (`home`, `page`, `external`, `home_pending`) and `foreground=` lines |
++| `launch <name>` | `OK launch <resolved name>`; the request is queued and served by the UI thread. Names match case-insensitively, exact first, then a unique prefix. Errors: `ERR unknown app`, `ERR ambiguous app name` |
++| `home` | `OK home` (or `OK home already`); a built-in page returns home, an external app gets SIGTERM to its process group (SIGKILL after 3 s), the same as an ESC long-press |
+ | `screenshot` | multipart：第一帧 `OK image/x-portable-pixmap`，第二帧为 PPM 数据 |
+ 
++`launch` 与 `home` 只表示请求已被接受；用 `current` 轮询 `mode` 确认结果。`launch` 可在任何状态下发送：内置页面会先返回主页，外部应用会先被终止，然后再启动目标应用（排队请求 20 秒后失效）。这四条命令由 `projects/APPLaunch/main/ui/model/launcher_rpc_bridge.hpp` 实现，通过 `cp0_rpc_set_command_handler()`（`cp0_automation_ext.hpp`）注册；handler 运行在 RPC 线程，UI 状态只通过快照和 LVGL timer 访问。
++
+ 失败响应以 `ERR ` 开头；未知命令返回 `ERR unknown command`。调用方必须检查响应前缀。
+ 
+ 代码事实源：`ext_components/cp0_lvgl/src/cp0/cp0_lvgl_rpc.cpp`、`ext_components/cp0_lvgl/Kconfig` 和 `scripts/cp0_rpc.py`。
+diff --git a/ext_components/cp0_lvgl/include/cp0_automation_ext.hpp b/ext_components/cp0_lvgl/include/cp0_automation_ext.hpp
+new file mode 100644
+index 0000000..cb8ba28
+--- /dev/null
++++ b/ext_components/cp0_lvgl/include/cp0_automation_ext.hpp
+@@ -0,0 +1,49 @@
++/*
++ * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
++ *
++ * SPDX-License-Identifier: MIT
++ */
++
++#pragma once
++
++#include <functional>
++#include <string>
++
++/*
++ * Extension points for the local automation RPC (cp0_lvgl_rpc.cpp).
++ *
++ * Both are compiled on every platform so that application code can link
++ * without #ifdef. When the ZMQ RPC is not built in, nothing ever invokes the
++ * command handler and the registration is simply inert.
++ */
++
++/*
++ * Handler for application-specific RPC commands. Called on the RPC broker
++ * thread, NOT the LVGL thread: it must not touch LVGL or UI objects directly.
++ * Return true when the command was handled and fill `reply` with the full
++ * response (it must start with "OK" or "ERR "). Return false to fall through
++ * to "ERR unknown command". Pass an empty function to unregister.
++ */
++using Cp0RpcCommandHandler =
++    std::function<bool(const std::string &command, const std::string &args, std::string &reply)>;
++
++void cp0_rpc_set_command_handler(Cp0RpcCommandHandler handler);
++bool cp0_rpc_dispatch_command(const std::string &command, const std::string &args,
++                              std::string &reply);
++
++namespace cp0_external_app_control {
++
++/* Thread-safe, lock-free. The external app runner marks itself active while a
++ * child process group is being supervised. */
++void set_active(bool active) noexcept;
++bool active() noexcept;
++
++/* Ask the supervising loop to end the running external app the same way an
++ * ESC long-press does (SIGTERM to the process group, SIGKILL after the grace
++ * period). Returns false (and does nothing) when no external app is active. */
++bool request_terminate() noexcept;
++
++/* Consumed by the runner loop; true at most once per request. */
++bool consume_terminate() noexcept;
++
++} // namespace cp0_external_app_control
+diff --git a/ext_components/cp0_lvgl/src/cp0/cp0_external_app_runner.cpp b/ext_components/cp0_lvgl/src/cp0/cp0_external_app_runner.cpp
+index 5cdc252..e99c85a 100644
+--- a/ext_components/cp0_lvgl/src/cp0/cp0_external_app_runner.cpp
++++ b/ext_components/cp0_lvgl/src/cp0/cp0_external_app_runner.cpp
+@@ -8,6 +8,7 @@
+ 
+ #include "cp0_esc_exit_policy.hpp"
+ #include "cp0_esc_state.h"
++#include "cp0_automation_ext.hpp"
+ #include "../cp0_external_process_group.hpp"
+ #include "cp0_process_commands.hpp"
+ 
+@@ -89,6 +90,10 @@ int run(const char *command, bool keep_root)
+                  subreaper ? 1 : 0);
+ 
+     cp0_esc_exit_policy::StateMachine esc_policy;
++    cp0_external_app_control::set_active(true);
++    bool rpc_terminated = false;
++    bool rpc_killed = false;
++    std::uint64_t rpc_terminate_ms = 0;
+     bool leader_reaped = false;
+     int status = 0;
+ 
+@@ -118,8 +123,21 @@ int run(const char *command, bool keep_root)
+             std::fprintf(stderr, "[process] grace timeout: SIGKILL pgid=%d\n", static_cast<int>(pid));
+             killpg(pid, SIGKILL);
+         }
++        if (cp0_external_app_control::consume_terminate() && !rpc_terminated) {
++            rpc_terminated = true;
++            rpc_terminate_ms = monotonic_ms();
++            std::fprintf(stderr, "[process] RPC home request: SIGTERM pgid=%d\n", static_cast<int>(pid));
++            killpg(pid, SIGTERM);
++        }
++        if (rpc_terminated && !rpc_killed &&
++            monotonic_ms() - rpc_terminate_ms >= cp0_esc_exit_policy::KILL_GRACE_MS) {
++            rpc_killed = true;
++            std::fprintf(stderr, "[process] RPC home grace timeout: SIGKILL pgid=%d\n", static_cast<int>(pid));
++            killpg(pid, SIGKILL);
++        }
+         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+     }
++    cp0_external_app_control::set_active(false);
+ 
+     if (esc_policy.finish().hide_hint) ui_external_esc_hint(0);
+     cp0_process_group::reap_available(pid, pid, status, leader_reaped);
+diff --git a/ext_components/cp0_lvgl/src/cp0/cp0_lvgl_rpc.cpp b/ext_components/cp0_lvgl/src/cp0/cp0_lvgl_rpc.cpp
+index 2ccc58e..1510ee4 100644
+--- a/ext_components/cp0_lvgl/src/cp0/cp0_lvgl_rpc.cpp
++++ b/ext_components/cp0_lvgl/src/cp0/cp0_lvgl_rpc.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "cp0_lvgl.h"
+ #include "cp0_lvgl_app.h"
++#include "cp0_automation_ext.hpp"
+ #include "../cp0_init_once.hpp"
+ #include "../cp0_rpc_runtime_contract.hpp"
+ 
+@@ -230,6 +231,18 @@ void rpc_broker(std::shared_ptr<zmq::context_t> context,
+                 rep.send(zmq::buffer(ppm), zmq::send_flags::none);
+                 continue;
+             }
++            {
++                std::string args;
++                std::getline(input, args);
++                const auto first = args.find_first_not_of(" \t");
++                const auto last = args.find_last_not_of(" \t\r\n");
++                args = first == std::string::npos ? std::string() : args.substr(first, last - first + 1);
++                std::string reply;
++                if (cp0_rpc_dispatch_command(command, args, reply)) {
++                    send_text(rep, reply.empty() ? std::string("ERR empty reply") : reply);
++                    continue;
++                }
++            }
+             send_text(rep, "ERR unknown command");
+         }
+     } catch (const zmq::error_t &e) {
+diff --git a/ext_components/cp0_lvgl/src/cp0_automation_ext.cpp b/ext_components/cp0_lvgl/src/cp0_automation_ext.cpp
+new file mode 100644
+index 0000000..b9d2334
+--- /dev/null
++++ b/ext_components/cp0_lvgl/src/cp0_automation_ext.cpp
+@@ -0,0 +1,71 @@
++/*
++ * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
++ *
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "cp0_automation_ext.hpp"
++
++#include <atomic>
++#include <mutex>
++#include <utility>
++
++namespace {
++
++std::mutex g_handler_mutex;
++Cp0RpcCommandHandler g_handler;
++
++std::atomic<bool> g_external_active{false};
++std::atomic<bool> g_terminate_requested{false};
++
++} // namespace
++
++void cp0_rpc_set_command_handler(Cp0RpcCommandHandler handler)
++{
++    std::lock_guard<std::mutex> lock(g_handler_mutex);
++    g_handler = std::move(handler);
++}
++
++bool cp0_rpc_dispatch_command(const std::string &command, const std::string &args,
++                              std::string &reply)
++{
++    Cp0RpcCommandHandler handler;
++    {
++        std::lock_guard<std::mutex> lock(g_handler_mutex);
++        handler = g_handler;
++    }
++    if (!handler) return false;
++    try {
++        return handler(command, args, reply);
++    } catch (...) {
++        reply = "ERR handler failed";
++        return true;
++    }
++}
++
++namespace cp0_external_app_control {
++
++void set_active(bool active) noexcept
++{
++    if (active) g_terminate_requested.store(false, std::memory_order_release);
++    g_external_active.store(active, std::memory_order_release);
++}
++
++bool active() noexcept
++{
++    return g_external_active.load(std::memory_order_acquire);
++}
++
++bool request_terminate() noexcept
++{
++    if (!g_external_active.load(std::memory_order_acquire)) return false;
++    g_terminate_requested.store(true, std::memory_order_release);
++    return true;
++}
++
++bool consume_terminate() noexcept
++{
++    return g_terminate_requested.exchange(false, std::memory_order_acq_rel);
++}
++
++} // namespace cp0_external_app_control
+diff --git a/projects/APPLaunch/config_defaults.mk b/projects/APPLaunch/config_defaults.mk
+index ca1e8a9..e20097f 100644
+--- a/projects/APPLaunch/config_defaults.mk
++++ b/projects/APPLaunch/config_defaults.mk
+@@ -100,6 +100,7 @@ CONFIG_CP0_LVGL_INIT_LORA=y
+ CONFIG_CP0_LVGL_INIT_FILESYSTEM=y
+ CONFIG_CP0_LVGL_INIT_CONFIG=y
+ CONFIG_CP0_LVGL_INIT_PTY=y
++CONFIG_CP0_LVGL_USE_ZMQ_RPC=y
+ CONFIG_CP0_LVGL_INIT_RPC=y
+ CONFIG_CP0_LVGL_INIT_AUDIO=y
+ CONFIG_CP0_LVGL_INIT_PROCESS=y
+diff --git a/projects/APPLaunch/linux_x86_cross_cp0_config_defaults.mk b/projects/APPLaunch/linux_x86_cross_cp0_config_defaults.mk
+index 6f7c7d0..ff2019a 100644
+--- a/projects/APPLaunch/linux_x86_cross_cp0_config_defaults.mk
++++ b/projects/APPLaunch/linux_x86_cross_cp0_config_defaults.mk
+@@ -106,6 +106,7 @@ CONFIG_CP0_LVGL_COMPONENT_ENABLED=y
+ CONFIG_CP0_LVGL_INIT_FILESYSTEM=y
+ CONFIG_CP0_LVGL_INIT_CONFIG=y
+ CONFIG_CP0_LVGL_INIT_PTY=y
++CONFIG_CP0_LVGL_USE_ZMQ_RPC=y
+ CONFIG_CP0_LVGL_INIT_RPC=y
+ CONFIG_CP0_LVGL_INIT_AUDIO=y
+ CONFIG_CP0_LVGL_INIT_PROCESS=y
+diff --git a/projects/APPLaunch/mac_cross_cp0_config_defaults.mk b/projects/APPLaunch/mac_cross_cp0_config_defaults.mk
+index ef21d6f..718f23e 100644
+--- a/projects/APPLaunch/mac_cross_cp0_config_defaults.mk
++++ b/projects/APPLaunch/mac_cross_cp0_config_defaults.mk
+@@ -108,6 +108,7 @@ CONFIG_CP0_LVGL_COMPONENT_ENABLED=y
+ CONFIG_CP0_LVGL_INIT_FILESYSTEM=y
+ CONFIG_CP0_LVGL_INIT_CONFIG=y
+ CONFIG_CP0_LVGL_INIT_PTY=y
++CONFIG_CP0_LVGL_USE_ZMQ_RPC=y
+ CONFIG_CP0_LVGL_INIT_RPC=y
+ CONFIG_CP0_LVGL_INIT_AUDIO=y
+ CONFIG_CP0_LVGL_INIT_PROCESS=y
+diff --git a/projects/APPLaunch/main/ui/launch.cpp b/projects/APPLaunch/main/ui/launch.cpp
+index c12ca06..49adfa4 100644
+--- a/projects/APPLaunch/main/ui/launch.cpp
++++ b/projects/APPLaunch/main/ui/launch.cpp
+@@ -16,6 +16,7 @@
+ #include "ui_screensaver.h"
+ #include "ui_loading.h"
+ #include "cp0_lvgl_app.h"
++#include "cp0_automation_ext.hpp"
+ #include "sample_log.h"
+ 
+ #include <exception>
+@@ -49,12 +50,14 @@ void Launch::bind_ui()
+     app_directory_watcher_.start([this] { applications_reload(); });
+     esc_ui_watchdog_.start();
+     esc_hold_hint_controller().set_force_home_callback(esc_force_home_cb, this);
++    start_rpc_bridge();
+ }
+ 
+ void Launch::launch_app()
+ {
+     const app *selected = app_at_index(current_app);
+     if (!selected) return;
++    foreground_name_ = selected->Name;
+ 
+     try {
+         selected->launch(this);
+@@ -84,6 +87,8 @@ void Launch::lv_go_back_home(void *arg) noexcept
+         self->app_Page.reset();
+         self->esc_ui_watchdog_.disarm();
+     }
++    self->foreground_name_.clear();
++    self->publish_rpc_state();
+ }
+ 
+ void Launch::go_back_home()
+@@ -95,6 +100,7 @@ void Launch::go_back_home()
+         page_lifecycle_.cancel_home_request();
+         esc_hold_hint_controller().set_return_home_enabled(true);
+     }
++    publish_rpc_state();
+ }
+ 
+ bool Launch::begin_page_launch()
+@@ -102,6 +108,7 @@ bool Launch::begin_page_launch()
+     if (!page_lifecycle_.begin_app()) return false;
+     esc_hold_hint_controller().set_return_home_enabled(true);
+     esc_ui_watchdog_.arm();
++    publish_rpc_state();
+     return true;
+ }
+ 
+@@ -127,6 +134,8 @@ void Launch::abort_page_launch() noexcept
+         lv_refr_now(nullptr);
+     } catch (...) {
+     }
++    foreground_name_.clear();
++    publish_rpc_state();
+ }
+ 
+ void Launch::launch_Exec_in_terminal(const std::string &exec, bool sysplause,
+@@ -150,6 +159,8 @@ void Launch::launch_Exec_in_terminal(const std::string &exec, bool sysplause,
+ void Launch::launch_Exec(const std::string &exec, bool keep_root)
+ {
+     SLOGI("Launching external app: %s (keep_root=%d)", exec.c_str(), keep_root);
++    external_active_ = true;
++    publish_rpc_state();
+     ui_loading::show("Loading...");
+     lv_disp_t *disp = lv_disp_get_default();
+     lv_indev_t *indev = lv_indev_get_next(nullptr);
+@@ -171,6 +182,8 @@ void Launch::launch_Exec(const std::string &exec, bool keep_root)
+     }
+     SLOGI("External app exited with code %d", result);
+ 
++    external_active_ = false;
++    foreground_name_.clear();
+     lv_timer_enable(true);
+     if (indev) lv_indev_set_group(indev, UILaunchPage::home_input_group());
+     if (auto page = launch_page_.lock()) page->show_home_screen();
+@@ -179,18 +192,21 @@ void Launch::launch_Exec(const std::string &exec, bool keep_root)
+     lv_refr_now(disp);
+     LVGL_RUN_FLAGE = 1;
+     ui_screensaver_set_foreground(1);
++    publish_rpc_state();
+ }
+ 
+ void Launch::select_next_app()
+ {
+     int next = normalized_app_index(current_app + 1);
+     if (next >= 0) current_app = next;
++    publish_rpc_state();
+ }
+ 
+ void Launch::select_previous_app()
+ {
+     int previous = normalized_app_index(current_app - 1);
+     if (previous >= 0) current_app = previous;
++    publish_rpc_state();
+ }
+ 
+ std::size_t Launch::app_count() const
+@@ -223,6 +239,7 @@ void Launch::refresh_home_carousel()
+     if (normalized < 0) return;
+     current_app = normalized;
+     if (auto page = launch_page_.lock()) page->refresh_carousel();
++    publish_rpc_state();
+ }
+ 
+ void Launch::reload_home_icons()
+@@ -235,6 +252,7 @@ void Launch::reload_home_icons()
+     for (const app &item : app_list)
+         icon_paths.push_back(item.Icon);
+     if (auto page = launch_page_.lock()) page->reload_home_icons(icon_paths);
++    publish_rpc_state();
+ }
+ 
+ void Launch::applications_reload()
+@@ -277,6 +295,7 @@ void Launch::esc_force_home_cb(void *user_data) noexcept
+ 
+ Launch::~Launch()
+ {
++    stop_rpc_bridge();
+     launcher_app_registry_clear_changed_callback(app_registry_changed_cb, this);
+     esc_hold_hint_controller().set_force_home_callback(nullptr, nullptr);
+     esc_hold_hint_controller().set_return_home_enabled(false);
+@@ -312,3 +331,114 @@ void Launch::app_registry_changed_cb(void *user_data) noexcept
+     } catch (...) {
+     }
+ }
++
++// ============================================================
++// Automation RPC bridge (see model/launcher_rpc_bridge.hpp)
++// ============================================================
++void Launch::publish_rpc_state()
++{
++    LauncherRpcSnapshot snapshot;
++    if (!bound_) {
++        rpc_bridge_->publish(std::move(snapshot));
++        return;
++    }
++    snapshot.apps.reserve(app_list.size());
++    for (const app &item : app_list) snapshot.apps.push_back(item.Name);
++    snapshot.current = current_app_index();
++    if (external_active_) {
++        snapshot.mode = LauncherRpcMode::EXTERNAL;
++    } else {
++        switch (page_lifecycle_.state()) {
++        case LauncherPageState::APP_ACTIVE: snapshot.mode = LauncherRpcMode::PAGE; break;
++        case LauncherPageState::HOME_PENDING: snapshot.mode = LauncherRpcMode::HOME_PENDING; break;
++        default: snapshot.mode = LauncherRpcMode::HOME; break;
++        }
++    }
++    if (snapshot.mode != LauncherRpcMode::HOME) snapshot.foreground = foreground_name_;
++    rpc_bridge_->publish(std::move(snapshot));
++}
++
++void Launch::start_rpc_bridge()
++{
++    rpc_bridge_->set_external_terminate_hook(
++        [] { return cp0_external_app_control::request_terminate(); });
++    // The handler owns the bridge, not Launch, so it stays valid if the broker
++    // thread is mid-call while Launch is destroyed.
++    cp0_rpc_set_command_handler(
++        [bridge = rpc_bridge_](const std::string &command, const std::string &args, std::string &reply) {
++            reply = bridge->handle(command, args);
++            return !reply.empty();
++        });
++    if (!rpc_timer_) rpc_timer_ = lv_timer_create(rpc_timer_cb, 100, this);
++    publish_rpc_state();
++}
++
++void Launch::stop_rpc_bridge() noexcept
++{
++    cp0_rpc_set_command_handler(nullptr);
++    try {
++        rpc_bridge_->publish(LauncherRpcSnapshot{});
++        rpc_bridge_->clear_pending();
++    } catch (...) {
++    }
++    if (rpc_timer_) {
++        lv_timer_delete(rpc_timer_);
++        rpc_timer_ = nullptr;
++    }
++}
++
++void Launch::rpc_timer_cb(lv_timer_t *timer) noexcept
++{
++    auto *self = static_cast<Launch *>(lv_timer_get_user_data(timer));
++    if (!self) return;
++    try {
++        self->process_rpc_request();
++    } catch (...) {
++        self->rpc_bridge_->clear_pending();
++    }
++}
++
++// Runs on the LVGL thread. A request stays pending (re-evaluated every tick)
++// until the launcher is back on the home screen, so `launch` works from
++// anywhere: a built-in page is sent home first, an external app is terminated
++// by the broker thread and the request is served once launch_Exec() returns.
++void Launch::process_rpc_request()
++{
++    const LauncherRpcRequest request = rpc_bridge_->pending();
++    if (request.kind == LauncherRpcRequestKind::NONE) return;
++
++    switch (page_lifecycle_.state()) {
++    case LauncherPageState::APP_ACTIVE:
++        go_back_home(); // lv_go_back_home() runs on a later tick of the LVGL loop
++        return;
++    case LauncherPageState::HOME_PENDING:
++        return;
++    case LauncherPageState::STOPPED:
++        rpc_bridge_->clear_pending();
++        return;
++    case LauncherPageState::HOME:
++        break;
++    }
++
++    if (request.kind == LauncherRpcRequestKind::HOME) {
++        rpc_bridge_->clear_pending();
++        return;
++    }
++
++    auto page = launch_page_.lock();
++    if (!page || page->is_navigating()) return; // let the carousel animation finish
++
++    std::vector<std::string> names;
++    names.reserve(app_list.size());
++    for (const app &item : app_list) names.push_back(item.Name);
++    const int index = launcher_rpc::find_app(names, request.name);
++    rpc_bridge_->clear_pending();
++    if (index < 0) {
++        SLOGW("[RPC] launch: app '%s' no longer exists", request.name.c_str());
++        return;
++    }
++    SLOGI("[RPC] launching '%s' (index %d)", request.name.c_str(), index);
++    current_app = index;
++    refresh_home_carousel();
++    launch_app();
++}
+diff --git a/projects/APPLaunch/main/ui/launch.h b/projects/APPLaunch/main/ui/launch.h
+index 1b7509b..35650c6 100644
+--- a/projects/APPLaunch/main/ui/launch.h
++++ b/projects/APPLaunch/main/ui/launch.h
+@@ -12,6 +12,7 @@
+ #include "ui_loading.h"
+ #include "esc_ui_watchdog.h"
+ #include "model/launcher_navigation_model.hpp"
++#include "model/launcher_rpc_bridge.hpp"
+ #include "terminal_help_factory.hpp"
+ 
+ #include <cstddef>
+@@ -74,6 +75,10 @@ private:
+     friend struct app;
+ 
+     void go_back_home();
++    void publish_rpc_state();
++    void process_rpc_request();
++    void start_rpc_bridge();
++    void stop_rpc_bridge() noexcept;
+     bool begin_page_launch();
+     void abort_page_launch() noexcept;
+     void launch_Exec_in_terminal(const std::string &exec, bool sysplause = true,
+@@ -88,6 +93,7 @@ private:
+     const app *app_at_index(int index) const;
+ 
+     static void lv_go_back_home(void *arg) noexcept;
++    static void rpc_timer_cb(lv_timer_t *timer) noexcept;
+     static void esc_force_home_cb(void *user_data) noexcept;
+     static void app_registry_changed_cb(void *user_data) noexcept;
+ 
+@@ -100,6 +106,10 @@ private:
+     bool bound_ = false;
+     std::list<app> app_list;
+     std::shared_ptr<void> app_Page;
++    std::shared_ptr<LauncherRpcBridge> rpc_bridge_ = std::make_shared<LauncherRpcBridge>();
++    lv_timer_t *rpc_timer_ = nullptr;
++    std::string foreground_name_;
++    bool external_active_ = false;
+ };
+ 
+ template <class PageT>
+diff --git a/projects/APPLaunch/main/ui/model/launcher_rpc_bridge.hpp b/projects/APPLaunch/main/ui/model/launcher_rpc_bridge.hpp
+new file mode 100644
+index 0000000..1417f7c
+--- /dev/null
++++ b/projects/APPLaunch/main/ui/model/launcher_rpc_bridge.hpp
+@@ -0,0 +1,200 @@
++/*
++ * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
++ *
++ * SPDX-License-Identifier: MIT
++ */
++
++#pragma once
++
++#include <algorithm>
++#include <cctype>
++#include <chrono>
++#include <cstddef>
++#include <functional>
++#include <mutex>
++#include <string>
++#include <utility>
++#include <vector>
++
++/*
++ * Thread bridge between the automation RPC broker thread and the LVGL thread.
++ *
++ * The broker thread never touches Launch or LVGL. It reads an immutable
++ * snapshot published by the LVGL thread (so `apps` / `current` answer
++ * instantly, even while an external app blocks the UI thread) and posts at
++ * most one pending request. The LVGL thread drains that request from a timer.
++ * No LVGL lock is taken anywhere in this class.
++ */
++
++enum class LauncherRpcMode
++{
++    NOT_READY,
++    HOME,         // carousel visible, nothing in the foreground
++    PAGE,         // built-in page (or terminal page) in the foreground
++    EXTERNAL,     // external executable owns the framebuffer
++    HOME_PENDING, // built-in page is returning home
++};
++
++inline const char *launcher_rpc_mode_name(LauncherRpcMode mode)
++{
++    switch (mode) {
++    case LauncherRpcMode::HOME: return "home";
++    case LauncherRpcMode::PAGE: return "page";
++    case LauncherRpcMode::EXTERNAL: return "external";
++    case LauncherRpcMode::HOME_PENDING: return "home_pending";
++    default: return "not_ready";
++    }
++}
++
++struct LauncherRpcSnapshot
++{
++    LauncherRpcMode mode = LauncherRpcMode::NOT_READY;
++    std::vector<std::string> apps;
++    std::size_t current = 0;
++    std::string foreground; // empty unless mode is PAGE / EXTERNAL / HOME_PENDING
++};
++
++enum class LauncherRpcRequestKind
++{
++    NONE,
++    HOME,
++    LAUNCH,
++};
++
++struct LauncherRpcRequest
++{
++    LauncherRpcRequestKind kind = LauncherRpcRequestKind::NONE;
++    std::string name;
++};
++
++namespace launcher_rpc {
++
++inline std::string ascii_lower(std::string text)
++{
++    std::transform(text.begin(), text.end(), text.begin(),
++                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++    return text;
++}
++
++// Case-insensitive exact match first, then a unique case-insensitive prefix.
++// Returns the index, -1 when nothing matches, -2 when a prefix is ambiguous.
++inline int find_app(const std::vector<std::string> &apps, const std::string &query)
++{
++    const std::string wanted = ascii_lower(query);
++    if (wanted.empty()) return -1;
++    int prefix_match = -1;
++    bool ambiguous = false;
++    for (std::size_t i = 0; i < apps.size(); ++i) {
++        const std::string name = ascii_lower(apps[i]);
++        if (name == wanted) return static_cast<int>(i);
++        if (name.compare(0, wanted.size(), wanted) == 0) {
++            if (prefix_match >= 0) ambiguous = true;
++            prefix_match = static_cast<int>(i);
++        }
++    }
++    if (ambiguous) return -2;
++    return prefix_match;
++}
++
++inline std::string one_line(std::string text)
++{
++    std::replace(text.begin(), text.end(), '\n', ' ');
++    std::replace(text.begin(), text.end(), '\r', ' ');
++    return text;
++}
++
++} // namespace launcher_rpc
++
++class LauncherRpcBridge
++{
++public:
++    using Clock = std::chrono::steady_clock;
++    // A queued request that the UI thread has not completed in this long is dropped.
++    static constexpr std::chrono::seconds kRequestTtl{20};
++
++    // Hook that asks a running external app to end (see cp0_external_app_control).
++    void set_external_terminate_hook(std::function<bool()> hook)
++    {
++        std::lock_guard<std::mutex> lock(mutex_);
++        terminate_hook_ = std::move(hook);
++    }
++
++    // ---- LVGL thread ----------------------------------------------------
++    void publish(LauncherRpcSnapshot snapshot)
++    {
++        std::lock_guard<std::mutex> lock(mutex_);
++        snapshot_ = std::move(snapshot);
++    }
++
++    LauncherRpcRequest pending(Clock::time_point now = Clock::now())
++    {
++        std::lock_guard<std::mutex> lock(mutex_);
++        if (request_.kind != LauncherRpcRequestKind::NONE && now - queued_at_ > kRequestTtl)
++            request_ = {};
++        return request_;
++    }
++
++    void clear_pending()
++    {
++        std::lock_guard<std::mutex> lock(mutex_);
++        request_ = {};
++    }
++
++    // ---- RPC broker thread ----------------------------------------------
++    // Returns the complete reply ("OK ..." or "ERR ...") for apps/current/launch/home,
++    // and an empty string for any other command (caller falls through).
++    std::string handle(const std::string &command, const std::string &args,
++                       Clock::time_point now = Clock::now())
++    {
++        if (command != "apps" && command != "current" && command != "launch" && command != "home")
++            return {};
++
++        std::function<bool()> hook;
++        std::string reply;
++        {
++            std::lock_guard<std::mutex> lock(mutex_);
++            if (snapshot_.mode == LauncherRpcMode::NOT_READY)
++                return "ERR launcher not ready";
++
++            if (command == "apps") {
++                reply = "OK apps";
++                for (const auto &name : snapshot_.apps) reply += "\n" + launcher_rpc::one_line(name);
++                return reply;
++            }
++            if (command == "current") {
++                const std::string selected = snapshot_.current < snapshot_.apps.size()
++                    ? launcher_rpc::one_line(snapshot_.apps[snapshot_.current]) : std::string();
++                return "OK current\nselected=" + selected +
++                       "\nindex=" + std::to_string(snapshot_.current) +
++                       "\nmode=" + launcher_rpc_mode_name(snapshot_.mode) +
++                       "\nforeground=" + launcher_rpc::one_line(snapshot_.foreground);
++            }
++
++            if (command == "launch") {
++                if (args.empty()) return "ERR usage: launch <app name>";
++                const int index = launcher_rpc::find_app(snapshot_.apps, args);
++                if (index == -2) return "ERR ambiguous app name";
++                if (index < 0) return "ERR unknown app";
++                request_ = {LauncherRpcRequestKind::LAUNCH, snapshot_.apps[static_cast<std::size_t>(index)]};
++                reply = "OK launch " + launcher_rpc::one_line(request_.name);
++            } else { // home
++                if (snapshot_.mode == LauncherRpcMode::HOME && request_.kind == LauncherRpcRequestKind::NONE)
++                    return "OK home already";
++                request_ = {LauncherRpcRequestKind::HOME, {}};
++                reply = "OK home";
++            }
++            queued_at_ = now;
++            if (snapshot_.mode == LauncherRpcMode::EXTERNAL) hook = terminate_hook_;
++        }
++        // Outside the lock: the hook is lock-free but must not run under our mutex.
++        if (hook) hook();
++        return reply;
++    }
++
++private:
++    std::mutex mutex_;
++    LauncherRpcSnapshot snapshot_;
++    LauncherRpcRequest request_;
++    Clock::time_point queued_at_{};
++    std::function<bool()> terminate_hook_;
++};
+diff --git a/projects/APPLaunch/main/ui/ui_launch_page.h b/projects/APPLaunch/main/ui/ui_launch_page.h
+index 0419e2f..9a7f5ec 100644
+--- a/projects/APPLaunch/main/ui/ui_launch_page.h
++++ b/projects/APPLaunch/main/ui/ui_launch_page.h
+@@ -55,6 +55,7 @@ public:
+     void update_carousel_item(lv_obj_t *panel, lv_obj_t *label, const char *title,
+                               const std::string &icon);
+     void launch_selected_app();
++    bool is_navigating() const { return navigation_.is_animating(); }
+ 
+ protected:
+     std::array<lv_obj_t *, kLauncherCarouselElementCount> carousel_elements_ = {};
+diff --git a/projects/APPLaunch/tests/run_tests.sh b/projects/APPLaunch/tests/run_tests.sh
+index 3ef0fbd..f6b78d4 100755
+--- a/projects/APPLaunch/tests/run_tests.sh
++++ b/projects/APPLaunch/tests/run_tests.sh
+@@ -23,6 +23,10 @@ PYTHONPATH="$test_root/..${PYTHONPATH:+:$PYTHONPATH}" \
+     python3 "$test_root/test_config_default_file.py"
+ build_dir="${TMPDIR:-/tmp}/applaunch-tests"
+ mkdir -p "$build_dir"
++${CXX:-g++} -std=c++17 -Wall -Wextra -Werror -pthread \
++    "$test_root/test_launcher_rpc_bridge.cpp" \
++    -o "$build_dir/test_launcher_rpc_bridge"
++"$build_dir/test_launcher_rpc_bridge"
+ ${CXX:-g++} -std=c++17 -Wall -Wextra -Werror \
+     "$test_root/test_low_battery_flow.cpp" \
+     -o "$build_dir/test_low_battery_flow"
+diff --git a/projects/APPLaunch/tests/test_launcher_rpc_bridge.cpp b/projects/APPLaunch/tests/test_launcher_rpc_bridge.cpp
+new file mode 100644
+index 0000000..47a54dd
+--- /dev/null
++++ b/projects/APPLaunch/tests/test_launcher_rpc_bridge.cpp
+@@ -0,0 +1,75 @@
++/*
++ * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
++ *
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "../main/ui/model/launcher_rpc_bridge.hpp"
++
++#include <cassert>
++#include <string>
++
++int main()
++{
++    const std::vector<std::string> apps = {"Settings", "Terminal", "Calculator", "Camera"};
++    assert(launcher_rpc::find_app(apps, "terminal") == 1);
++    assert(launcher_rpc::find_app(apps, "CALCULATOR") == 2);
++    assert(launcher_rpc::find_app(apps, "cal") == 2);
++    assert(launcher_rpc::find_app(apps, "ca") == -2);   // Calculator / Camera
++    assert(launcher_rpc::find_app(apps, "nope") == -1);
++    assert(launcher_rpc::find_app(apps, "") == -1);
++
++    LauncherRpcBridge bridge;
++    assert(bridge.handle("apps", "") == "ERR launcher not ready");
++    assert(bridge.handle("ping", "").empty());
++
++    LauncherRpcSnapshot snap;
++    snap.mode = LauncherRpcMode::HOME;
++    snap.apps = apps;
++    snap.current = 2;
++    bridge.publish(snap);
++
++    assert(bridge.handle("apps", "") == "OK apps\nSettings\nTerminal\nCalculator\nCamera");
++    assert(bridge.handle("current", "") ==
++           "OK current\nselected=Calculator\nindex=2\nmode=home\nforeground=");
++    assert(bridge.handle("home", "") == "OK home already");
++    assert(bridge.pending().kind == LauncherRpcRequestKind::NONE);
++
++    assert(bridge.handle("launch", "") == "ERR usage: launch <app name>");
++    assert(bridge.handle("launch", "zzz") == "ERR unknown app");
++    assert(bridge.handle("launch", "ca") == "ERR ambiguous app name");
++    assert(bridge.pending().kind == LauncherRpcRequestKind::NONE);
++    assert(bridge.handle("launch", "terminal") == "OK launch Terminal");
++    auto request = bridge.pending();
++    assert(request.kind == LauncherRpcRequestKind::LAUNCH && request.name == "Terminal");
++    bridge.clear_pending();
++    assert(bridge.pending().kind == LauncherRpcRequestKind::NONE);
++
++    // External app in the foreground: the terminate hook fires, once per request.
++    int hook_calls = 0;
++    bridge.set_external_terminate_hook([&] { ++hook_calls; return true; });
++    snap.mode = LauncherRpcMode::EXTERNAL;
++    snap.foreground = "Camera";
++    bridge.publish(snap);
++    assert(bridge.handle("current", "").find("mode=external\nforeground=Camera") != std::string::npos);
++    assert(bridge.handle("home", "") == "OK home");
++    assert(hook_calls == 1);
++    assert(bridge.pending().kind == LauncherRpcRequestKind::HOME);
++    assert(bridge.handle("launch", "settings") == "OK launch Settings");
++    assert(hook_calls == 2);
++    assert(bridge.pending().name == "Settings");
++
++    // Built-in page in the foreground: no terminate hook.
++    snap.mode = LauncherRpcMode::PAGE;
++    bridge.publish(snap);
++    assert(bridge.handle("home", "") == "OK home");
++    assert(hook_calls == 2);
++
++    // Requests expire if the UI thread never serves them.
++    const auto now = LauncherRpcBridge::Clock::now();
++    bridge.handle("home", "", now);
++    assert(bridge.pending(now + std::chrono::seconds(5)).kind == LauncherRpcRequestKind::HOME);
++    assert(bridge.pending(now + LauncherRpcBridge::kRequestTtl + std::chrono::seconds(1)).kind ==
++           LauncherRpcRequestKind::NONE);
++    return 0;
++}
+diff --git a/scripts/cp0_rpc.py b/scripts/cp0_rpc.py
+index 272ea28..8a7c54d 100644
+--- a/scripts/cp0_rpc.py
++++ b/scripts/cp0_rpc.py
+@@ -41,6 +41,26 @@ def send_key(socket: zmq.Socket, code: int, state: int, mods: int = 0) -> None:
+     request(socket, f"key {code} {state} {mods}")
+ 
+ 
++def parse_current(socket: zmq.Socket) -> dict[str, str]:
++    body = request(socket, "current")[0].decode("utf-8", "replace")
++    fields = {}
++    for line in body.splitlines()[1:]:
++        key, _, value = line.partition("=")
++        fields[key] = value
++    return fields
++
++
++def wait_for(socket: zmq.Socket, predicate, seconds: float) -> dict[str, str]:
++    deadline = time.monotonic() + seconds
++    while True:
++        state = parse_current(socket)
++        if predicate(state):
++            return state
++        if time.monotonic() >= deadline:
++            raise RuntimeError(f"timed out waiting; last state: {state}")
++        time.sleep(0.1)
++
++
+ def main() -> int:
+     parser = argparse.ArgumentParser(description="Control a cp0_lvgl device over ZMQ RPC.")
+     parser.add_argument("--endpoint", default="tcp://127.0.0.1:5557")
+@@ -60,6 +80,15 @@ def main() -> int:
+     text.add_argument("value")
+     password = sub.add_parser("password")
+     password.add_argument("value", nargs="?")
++    sub.add_parser("apps", help="list app names in carousel order")
++    sub.add_parser("current", help="selected app, mode (home/page/external/home_pending) and foreground app")
++    launch = sub.add_parser("launch", help="select and launch an app (case-insensitive name)")
++    launch.add_argument("name", nargs="+")
++    launch.add_argument("--wait", type=float, default=0.0, metavar="SECONDS",
++                        help="poll `current` until the app is in the foreground")
++    home = sub.add_parser("home", help="return to the home screen (ends a foreground app)")
++    home.add_argument("--wait", type=float, default=0.0, metavar="SECONDS",
++                      help="poll `current` until mode is home")
+     hold = sub.add_parser("hold")
+     hold.add_argument("key", type=key_code)
+     hold.add_argument("seconds", type=float)
+@@ -88,6 +117,25 @@ def main() -> int:
+             send_key(socket, args.key, 1)
+             time.sleep(max(0.0, args.duration))
+             send_key(socket, args.key, 0)
++        elif args.command == "apps":
++            print("\n".join(request(socket, "apps")[0].decode().splitlines()[1:]))
++        elif args.command == "current":
++            print("\n".join(request(socket, "current")[0].decode().splitlines()[1:]))
++        elif args.command == "launch":
++            reply = request(socket, "launch " + " ".join(args.name))[0].decode()
++            print(reply)
++            resolved = reply.partition("OK launch ")[2].strip().lower()
++            if args.wait > 0:
++                state = wait_for(
++                    socket,
++                    lambda s: s["mode"] in ("page", "external") and s["foreground"].lower() == resolved,
++                    args.wait)
++                print(f"mode={state['mode']} foreground={state['foreground']}")
++        elif args.command == "home":
++            print(request(socket, "home")[0].decode())
++            if args.wait > 0:
++                wait_for(socket, lambda s: s["mode"] == "home", args.wait)
++                print("mode=home")
+         elif args.command == "text":
+             request(socket, f"text {args.value}")
+         elif args.command == "password":

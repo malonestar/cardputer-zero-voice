@@ -1,0 +1,14 @@
+[Unit]
+Description=CardputerZero wake word listener (microWakeWord)
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+ExecStart=%h/cz-ai/venv/bin/python %h/cz-ai/wake_listener.py
+WorkingDirectory=%h/cz-ai
+Restart=always
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,135 @@
+▁GO ▁HOME :1.5 #0.25 @home
+▁C LO SE ▁THIS :1.5 #0.25 @home
+▁GO ▁BACK :1.5 #0.25 @home
+▁ VO LU ME ▁UP :1.5 #0.25 @volume_up
+▁TURN ▁IT ▁UP :1.5 #0.25 @volume_up
+▁LO U DER :1.5 #0.25 @volume_up
+▁ VO LU ME ▁DOWN :1.5 #0.25 @volume_down
+▁TURN ▁IT ▁DOWN :1.5 #0.25 @volume_down
+▁QU I E TER :1.5 #0.25 @volume_down
+▁MU TE :1.5 #0.25 @mute
+▁B R IGHT NESS ▁UP :1.5 #0.25 @brightness_up
+▁B R IGHT ER :1.5 #0.25 @brightness_up
+▁B R IGHT NESS ▁DOWN :1.5 #0.25 @brightness_down
+▁DI M M ER :1.5 #0.25 @brightness_down
+▁BA T TER Y ▁LE VE L :1.5 #0.25 @battery
+▁HOW ▁MUCH ▁BA T TER Y :1.5 #0.25 @battery
+▁DE VI CE ▁T E M PER AT URE :1.5 #0.25 @temperature
+▁HOW ▁HO T ▁ARE ▁YOU :1.5 #0.25 @temperature
+▁W IF I ▁STA T US :1.5 #0.25 @wifi
+▁I P ▁A D D RE S S :1.5 #0.25 @wifi
+▁SYSTEM ▁STA T US :1.5 #0.25 @status
+▁WHAT ▁TIME ▁IS ▁IT :1.5 #0.25 @time
+▁O P EN ▁SE T T ING S :1.5 #0.25 @open:Settings
+▁LA UN CH ▁SE T T ING S :1.5 #0.25 @open:Settings
+▁O P EN ▁THE ▁SE T T ING S :1.5 #0.25 @open:Settings
+▁O P EN ▁ TER M IN AL :1.5 #0.25 @open:CLI
+▁LA UN CH ▁ TER M IN AL :1.5 #0.25 @open:CLI
+▁O P EN ▁THE ▁ TER M IN AL :1.5 #0.25 @open:CLI
+▁O P EN ▁COM MAN D ▁LI NE :1.5 #0.25 @open:CLI
+▁LA UN CH ▁COM MAN D ▁LI NE :1.5 #0.25 @open:CLI
+▁O P EN ▁THE ▁COM MAN D ▁LI NE :1.5 #0.25 @open:CLI
+▁O P EN ▁RE C OR DER :1.5 #0.25 @open:Rec
+▁LA UN CH ▁RE C OR DER :1.5 #0.25 @open:Rec
+▁O P EN ▁THE ▁RE C OR DER :1.5 #0.25 @open:Rec
+▁O P EN ▁C AL C UL AT OR :1.5 #0.25 @open:Math
+▁LA UN CH ▁C AL C UL AT OR :1.5 #0.25 @open:Math
+▁O P EN ▁THE ▁C AL C UL AT OR :1.5 #0.25 @open:Math
+▁O P EN ▁FI LES :1.5 #0.25 @open:Files
+▁LA UN CH ▁FI LES :1.5 #0.25 @open:Files
+▁O P EN ▁THE ▁FI LES :1.5 #0.25 @open:Files
+▁O P EN ▁FI LE ▁MAN AGE R :1.5 #0.25 @open:Files
+▁LA UN CH ▁FI LE ▁MAN AGE R :1.5 #0.25 @open:Files
+▁O P EN ▁THE ▁FI LE ▁MAN AGE R :1.5 #0.25 @open:Files
+▁O P EN ▁ST OR E :1.5 #0.25 @open:Store
+▁LA UN CH ▁ST OR E :1.5 #0.25 @open:Store
+▁O P EN ▁THE ▁ST OR E :1.5 #0.25 @open:Store
+▁O P EN ▁APP ▁ST OR E :1.5 #0.25 @open:Store
+▁LA UN CH ▁APP ▁ST OR E :1.5 #0.25 @open:Store
+▁O P EN ▁THE ▁APP ▁ST OR E :1.5 #0.25 @open:Store
+▁O P EN ▁ Z ▁C LA W :1.5 #0.25 @open:ZClaw
+▁LA UN CH ▁ Z ▁C LA W :1.5 #0.25 @open:ZClaw
+▁O P EN ▁THE ▁ Z ▁C LA W :1.5 #0.25 @open:ZClaw
+▁O P EN ▁I ▁P ▁PA N EL :1.5 #0.25 @open:IP_Panel
+▁LA UN CH ▁I ▁P ▁PA N EL :1.5 #0.25 @open:IP_Panel
+▁O P EN ▁S ▁S ▁ H :1.5 #0.25 @open:SSH
+▁LA UN CH ▁S ▁S ▁ H :1.5 #0.25 @open:SSH
+▁O P EN ▁GA ME :1.5 #0.25 @open:Game
+▁LA UN CH ▁GA ME :1.5 #0.25 @open:Game
+▁O P EN ▁THE ▁GA ME :1.5 #0.25 @open:Game
+▁O P EN ▁T AN K :1.5 #0.25 @open:Tank
+▁LA UN CH ▁T AN K :1.5 #0.25 @open:Tank
+▁O P EN ▁THE ▁T AN K :1.5 #0.25 @open:Tank
+▁O P EN ▁K E Y B O ARD ▁GU ID E :1.5 #0.25 @open:Keyboard_Guide
+▁LA UN CH ▁K E Y B O ARD ▁GU ID E :1.5 #0.25 @open:Keyboard_Guide
+▁O P EN ▁THE ▁K E Y B O ARD ▁GU ID E :1.5 #0.25 @open:Keyboard_Guide
+▁O P EN ▁G ▁P ▁S :1.5 #0.25 @open:GPS
+▁LA UN CH ▁G ▁P ▁S :1.5 #0.25 @open:GPS
+▁O P EN ▁LO RA :1.5 #0.25 @open:LoRa
+▁LA UN CH ▁LO RA :1.5 #0.25 @open:LoRa
+▁O P EN ▁THE ▁LO RA :1.5 #0.25 @open:LoRa
+▁O P EN ▁ N ▁F ▁C :1.5 #0.25 @open:NFC
+▁LA UN CH ▁ N ▁F ▁C :1.5 #0.25 @open:NFC
+▁O P EN ▁SU B ▁G ▁CHA T :1.5 #0.25 @open:SubG_Chat
+▁LA UN CH ▁SU B ▁G ▁CHA T :1.5 #0.25 @open:SubG_Chat
+▁O P EN ▁I ▁ R ▁RE MO TE :1.5 #0.25 @open:IR_Remote
+▁LA UN CH ▁I ▁ R ▁RE MO TE :1.5 #0.25 @open:IR_Remote
+▁O P EN ▁RE MO TE :1.5 #0.25 @open:IR_Remote
+▁LA UN CH ▁RE MO TE :1.5 #0.25 @open:IR_Remote
+▁O P EN ▁THE ▁RE MO TE :1.5 #0.25 @open:IR_Remote
+▁O P EN ▁I ▁ R ▁CHA T :1.5 #0.25 @open:IR_Chat
+▁LA UN CH ▁I ▁ R ▁CHA T :1.5 #0.25 @open:IR_Chat
+▁O P EN ▁CAME RA :1.5 #0.25 @open:Camera
+▁LA UN CH ▁CAME RA :1.5 #0.25 @open:Camera
+▁O P EN ▁THE ▁CAME RA :1.5 #0.25 @open:Camera
+▁O P EN ▁MU S IC :1.5 #0.25 @open:Music
+▁LA UN CH ▁MU S IC :1.5 #0.25 @open:Music
+▁O P EN ▁THE ▁MU S IC :1.5 #0.25 @open:Music
+▁O P EN ▁MU S IC ▁PLAY ER :1.5 #0.25 @open:Music
+▁LA UN CH ▁MU S IC ▁PLAY ER :1.5 #0.25 @open:Music
+▁O P EN ▁THE ▁MU S IC ▁PLAY ER :1.5 #0.25 @open:Music
+▁O P EN ▁P IAN O :1.5 #0.25 @open:Piano
+▁LA UN CH ▁P IAN O :1.5 #0.25 @open:Piano
+▁O P EN ▁THE ▁P IAN O :1.5 #0.25 @open:Piano
+▁O P EN ▁COMP AS S :1.5 #0.25 @open:Compass
+▁LA UN CH ▁COMP AS S :1.5 #0.25 @open:Compass
+▁O P EN ▁THE ▁COMP AS S :1.5 #0.25 @open:Compass
+▁O P EN ▁P Y TH ON :1.5 #0.25 @open:Python
+▁LA UN CH ▁P Y TH ON :1.5 #0.25 @open:Python
+▁O P EN ▁THE ▁P Y TH ON :1.5 #0.25 @open:Python
+▁UN LO CK :1.5 #0.25 @unlock
+▁UN LO CK ▁THE ▁S C RE EN :1.5 #0.25 @unlock
+▁WA KE ▁UP :1.5 #0.25 @unlock
+▁S LE E P :1.5 #0.25 @sleep
+▁GO ▁TO ▁S LE E P :1.5 #0.25 @sleep
+▁LO CK ▁THE ▁S C RE EN :1.5 #0.25 @sleep
+▁TURN ▁ON ▁W IF I :1.5 #0.25 @wifi_on
+▁TURN ▁ON ▁W I ▁FI :1.5 #0.25 @wifi_on
+▁TURN ▁ON ▁WHY ▁FI :1.5 #0.25 @wifi_on
+▁TURN ▁ON ▁THE ▁W IF I :1.5 #0.25 @wifi_on
+▁TURN ▁ON ▁THE ▁W I ▁FI :1.5 #0.25 @wifi_on
+▁TURN ▁ON ▁THE ▁WHY ▁FI :1.5 #0.25 @wifi_on
+▁TURN ▁ON ▁W I RE LES S :1.5 #0.25 @wifi_on
+▁W I RE LES S ▁ON :1.5 #0.25 @wifi_on
+▁TURN ▁ON ▁THE ▁NE T W OR K :1.5 #0.25 @wifi_on
+▁NE T W OR K ▁ON :1.5 #0.25 @wifi_on
+▁TURN ▁OF F ▁W IF I :1.5 #0.25 @wifi_off
+▁TURN ▁OF F ▁W I ▁FI :1.5 #0.25 @wifi_off
+▁TURN ▁OF F ▁WHY ▁FI :1.5 #0.25 @wifi_off
+▁TURN ▁OF F ▁THE ▁W IF I :1.5 #0.25 @wifi_off
+▁TURN ▁OF F ▁THE ▁W I ▁FI :1.5 #0.25 @wifi_off
+▁TURN ▁OF F ▁THE ▁WHY ▁FI :1.5 #0.25 @wifi_off
+▁TURN ▁OF F ▁W I RE LES S :1.5 #0.25 @wifi_off
+▁W I RE LES S ▁OF F :1.5 #0.25 @wifi_off
+▁TURN ▁OF F ▁THE ▁NE T W OR K :1.5 #0.25 @wifi_off
+▁NE T W OR K ▁OF F :1.5 #0.25 @wifi_off
+▁T AR S :1.5 #0.25 @open:TARS
+▁O P EN ▁T AR S :1.5 #0.25 @open:TARS
+▁LA UN CH ▁T AR S :1.5 #0.25 @open:TARS
+▁O P EN ▁THE ▁T AR S :1.5 #0.25 @open:TARS
+▁TALK ▁TO ▁T AR S :1.5 #0.25 @open:TARS
+▁T AR Z :1.5 #0.25 @open:TARS
+▁O P EN ▁T AR Z :1.5 #0.25 @open:TARS
+▁LA UN CH ▁T AR Z :1.5 #0.25 @open:TARS
+▁O P EN ▁THE ▁T AR Z :1.5 #0.25 @open:TARS
+▁TALK ▁TO ▁T AR Z :1.5 #0.25 @open:TARS

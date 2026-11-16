@@ -1,0 +1,7 @@
+config.json
+token
+tars_password
+logs/
+__pycache__/
+*.onnx
+venv/

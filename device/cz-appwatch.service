@@ -1,0 +1,15 @@
+[Unit]
+Description=CardputerZero app watcher (stops the voice layer and tool server while an app is open)
+After=APPLaunch.service cz-mcp.service cz-voice.service
+
+[Service]
+ExecStart=%h/cz-ai/venv/bin/python %h/cz-ai/appwatch.py
+# whenever the watcher itself stops or crashes, make sure voice is not left switched off
+ExecStopPost=/bin/sh -c 'systemctl --user start --no-block cz-mcp.service cz-voice.service; rm -f "$XDG_RUNTIME_DIR/cz-appwatch.stopped"'
+WorkingDirectory=%h/cz-ai
+Restart=always
+RestartSec=3
+Nice=10
+
+[Install]
+WantedBy=default.target

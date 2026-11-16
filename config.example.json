@@ -1,0 +1,16 @@
+{
+  "wake": {"models": ["okay_nabu"], "enabled": true},
+  "voice": {
+    "engine": "server",
+    "kws": true,
+    "tts_url": "http://YOUR-SPEECH-SERVER:8001/v1/audio/speech",
+    "tts_model": "speaches-ai/piper-en_US-ryan-high",
+    "tts_voice": "ryan"
+  },
+  "dictation": {
+    "engine": "server",
+    "url": "http://YOUR-SPEECH-SERVER:8001/v1/audio/transcriptions",
+    "model": "Systran/faster-whisper-small"
+  },
+  "tars": {"url": "http://YOUR-TARS-ROBOT"}
+}
